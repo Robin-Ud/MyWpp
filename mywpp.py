@@ -7,6 +7,7 @@ Substitui: set-wallpaper, next-wallpaper, kill-wallpaper, sync-dji.
 from __future__ import annotations
 
 import fcntl
+import json
 import random
 import subprocess
 import sys
@@ -23,7 +24,7 @@ IDX_FILE = Path.home() / ".local" / "share" / "hypr-wallpaper-idx"
 ORDER_FILE = Path.home() / ".local" / "share" / "hypr-wallpaper-order"
 LOCK_FILE = Path.home() / ".local" / "share" / "hypr-wallpaper.lock"
 
-MONITORS = ["eDP-1", "HDMI-A-1"]
+FALLBACK_MONITORS = ["eDP-1"]
 PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv"}
 MTP_ALBUM_NAMES = [
@@ -106,10 +107,20 @@ def notify(title: str, body: str) -> None:
     subprocess.run(["notify-send", title, body], capture_output=True)
 
 
+def monitors() -> list[str]:
+    """Monitores ativos segundo o Hyprland, com o interno (eDP) sempre primeiro."""
+    try:
+        names = [m["name"] for m in json.loads(hyprctl("monitors", "-j").stdout)]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        names = []
+    return sorted(names, key=lambda n: not n.startswith("eDP")) or FALLBACK_MONITORS
+
+
 def apply_wallpapers(images: list[str], idx: int) -> None:
-    """Preload + aplica os próximos len(MONITORS) wallpapers a partir de idx."""
+    """Preload + aplica um wallpaper por monitor ativo a partir de idx."""
     total = len(images)
-    for offset, monitor in enumerate(MONITORS):
+    mons = monitors()
+    for offset, monitor in enumerate(mons):
         img = images[(idx + offset) % total]
         hyprctl("hyprpaper", "preload", img)
     for _ in range(20):
@@ -117,7 +128,7 @@ def apply_wallpapers(images: list[str], idx: int) -> None:
         if images[idx % total] in loaded:
             break
         time.sleep(0.1)
-    for offset, monitor in enumerate(MONITORS):
+    for offset, monitor in enumerate(mons):
         img = images[(idx + offset) % total]
         hyprctl("hyprpaper", "wallpaper", f"{monitor},{img}")
 
@@ -137,7 +148,7 @@ def cmd_boot(_args) -> int:
 
         lines = []
         seen = set()
-        for offset, monitor in enumerate(MONITORS):
+        for offset, monitor in enumerate(monitors()):
             img = images[(idx + offset) % len(images)]
             if img not in seen:
                 lines.append(f"preload = {img}")
