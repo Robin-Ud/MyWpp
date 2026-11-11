@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """mywpp — troca de wallpaper (fila embaralhada, 2 monitores) + import de mídia DJI via MTP.
 
+Funciona com hyprpaper (Hyprland puro) e com o wallpaper da Noctalia via IPC (niri ou Hyprland).
+
 Substitui: set-wallpaper, next-wallpaper, kill-wallpaper, sync-dji.
 """
 
@@ -8,6 +10,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
 import random
 import subprocess
 import sys
@@ -97,10 +100,30 @@ def blacklist_add(name: str) -> None:
         fh.write(name + "\n")
 
 
-# ========================= hyprctl / notify =========================
+# ========================= hyprctl / niri / notify =========================
+
+def is_niri() -> bool:
+    """Sessão niri em vez de Hyprland (só muda de onde vem a lista de monitores)."""
+    return bool(os.environ.get("NIRI_SOCKET"))
+
+
+def uses_noctalia() -> bool:
+    """Wallpaper pela Noctalia (IPC) quando ela está rodando; senão, hyprpaper."""
+    return subprocess.run(["pgrep", "-x", "noctalia"], capture_output=True).returncode == 0
+
 
 def hyprctl(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["hyprctl", *args], capture_output=True, text=True)
+
+
+def noctalia(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["noctalia", "msg", *args], capture_output=True, text=True)
+
+
+def unload(img: str) -> None:
+    """Tira a imagem da memória do hyprpaper. A Noctalia gerencia isso sozinha."""
+    if not uses_noctalia():
+        hyprctl("hyprpaper", "unload", img)
 
 
 def notify(title: str, body: str) -> None:
@@ -108,10 +131,15 @@ def notify(title: str, body: str) -> None:
 
 
 def monitors() -> list[str]:
-    """Monitores ativos segundo o Hyprland, com o interno (eDP) sempre primeiro."""
+    """Monitores ativos segundo o compositor, com o interno (eDP) sempre primeiro."""
     try:
-        names = [m["name"] for m in json.loads(hyprctl("monitors", "-j").stdout)]
-    except (json.JSONDecodeError, KeyError, TypeError):
+        if is_niri():
+            # niri devolve {nome: saída}; saída desligada vem com "logical" nulo
+            out = subprocess.run(["niri", "msg", "-j", "outputs"], capture_output=True, text=True).stdout
+            names = [name for name, o in json.loads(out).items() if o.get("logical")]
+        else:
+            names = [m["name"] for m in json.loads(hyprctl("monitors", "-j").stdout)]
+    except (json.JSONDecodeError, KeyError, TypeError, AttributeError, OSError):
         names = []
     return sorted(names, key=lambda n: not n.startswith("eDP")) or FALLBACK_MONITORS
 
@@ -120,6 +148,10 @@ def apply_wallpapers(images: list[str], idx: int) -> None:
     """Preload + aplica um wallpaper por monitor ativo a partir de idx."""
     total = len(images)
     mons = monitors()
+    if uses_noctalia():
+        for offset, monitor in enumerate(mons):
+            noctalia("wallpaper-set", monitor, images[(idx + offset) % total])
+        return
     for offset, monitor in enumerate(mons):
         img = images[(idx + offset) % total]
         hyprctl("hyprpaper", "preload", img)
@@ -136,7 +168,21 @@ def apply_wallpapers(images: list[str], idx: int) -> None:
 # ========================= Subcomandos =========================
 
 def cmd_boot(_args) -> int:
-    """Roda no exec-once do Hyprland: avança a fila e (re)inicia o hyprpaper."""
+    """Roda no exec-once do Hyprland: avança a fila e (re)inicia o hyprpaper.
+
+    Com a Noctalia (niri ou Hyprland) roda depois de `noctalia --daemon` e só aplica pela IPC.
+    """
+    if uses_noctalia():
+        with queue_lock():
+            images = load_queue()
+            if not images:
+                print(f"Nenhuma imagem em {WALLPAPER_DIR}", file=sys.stderr)
+                return 1
+            idx = (read_idx() + 1) % len(images)
+            write_idx(idx)
+            apply_wallpapers(images, idx)
+        return 0
+
     conf = Path.home() / ".config" / "hypr" / "hyprpaper.conf"
     with queue_lock():
         images = load_queue()
@@ -174,7 +220,7 @@ def cmd_next(_args) -> int:
         write_idx(idx)
         apply_wallpapers(images, idx)
         if old_img != images[idx % len(images)]:
-            hyprctl("hyprpaper", "unload", old_img)
+            unload(old_img)
     return 0
 
 
@@ -190,7 +236,7 @@ def cmd_prev(_args) -> int:
         write_idx(idx)
         apply_wallpapers(images, idx)
         if old_img != images[idx % len(images)]:
-            hyprctl("hyprpaper", "unload", old_img)
+            unload(old_img)
     return 0
 
 
@@ -209,7 +255,7 @@ def cmd_delete(args) -> int:
         idx = read_idx()
         current = images[idx % len(images)]
 
-        hyprctl("hyprpaper", "unload", current)
+        unload(current)
         Path(current).unlink(missing_ok=True)
 
         if not args.keep:
@@ -329,7 +375,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="mywpp")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("boot", help="inicializa o hyprpaper com o próximo wallpaper (exec-once)")
+    sub.add_parser("boot", help="aplica o próximo wallpaper no login (hyprpaper ou Noctalia)")
     sub.add_parser("next", help="avança para o próximo wallpaper")
     sub.add_parser("prev", help="volta para o wallpaper anterior")
 

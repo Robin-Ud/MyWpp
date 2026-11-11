@@ -3,10 +3,13 @@
 CLI única para trocar wallpaper e importar mídia do DJI, substituindo os scripts
 `set-wallpaper` / `next-wallpaper` / `kill-wallpaper` / `sync-dji`.
 
+Funciona em duas sessões: no Hyprland aplica pelo `hyprpaper`; no niri (detectado por
+`$NIRI_SOCKET`) aplica pelo wallpaper da Noctalia (`noctalia msg wallpaper-set`). A fila é a mesma.
+
 ## Uso
 
 ```
-mywpp boot            # inicializa o hyprpaper com o próximo wallpaper (usado no exec-once do Hyprland)
+mywpp boot            # aplica o próximo wallpaper no login (exec-once do Hyprland; no niri, depois de `noctalia --daemon`)
 mywpp next            # avança para o próximo wallpaper (bind Super+W)
 mywpp prev            # volta para o wallpaper anterior
 mywpp delete          # remove o wallpaper atual e bloqueia reimportação futura (bind Super+Shift+W)
@@ -26,6 +29,7 @@ mywpp syncdji         # importa fotos/vídeos novos do DJI Album do celular via 
 ## Requisitos
 
 - `hyprctl`, `hyprpaper`, `notify-send` (ambiente Hyprland)
+- ou `niri` + `noctalia` (ambiente niri)
 - `gio` + PyGObject (`gi`) para o `syncdji` (descoberta do dispositivo MTP)
 - `dji-thumbs` no PATH (gera thumbnails de vídeos DJI novos, chamado pelo `syncdji`)
 
